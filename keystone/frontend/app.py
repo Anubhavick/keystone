@@ -17,6 +17,7 @@ try:
     from backend.vector_store import VectorStore
     from backend.claim_extractor import ClaimExtractor
     from backend.fact_verifier import FactVerifier
+    from backend.correction_engine import CorrectionEngine
 except ImportError as e:
     st.error(f"Failed to import backend modules: {e}. Please ensure you are running this from the 'frontend' directory or set PYTHONPATH correctly.")
     st.stop()
@@ -326,6 +327,20 @@ elif verify_button:
             
             results.append(result)
             progress_bar.progress((idx + 1) / len(claims))
+            
+        # Post-processing for Corrections
+        # We do this after main verification to keep progress bar moving for initial results
+        correction_engine = CorrectionEngine(api_key=st.session_state.get('api_key'))
+        
+        for res in results:
+            if res['status'] == 'contradicted' and not res.get('suggestion'):
+                status_text.text(f"Generating correction for: {res['claim'][:30]}...")
+                # Get top evidence
+                top_evidence = res['evidence'][0]['text'] if res['evidence'] else ""
+                if top_evidence:
+                    correction = correction_engine.generate_correction(res['claim'], top_evidence)
+                    if correction:
+                        res['suggestion'] = correction
         
         st.session_state.results = results
         progress_bar.empty()
@@ -440,9 +455,18 @@ elif verify_button:
                             st.markdown(f'<div class="evidence-box"><b>Source:</b> {evidence.get("source", "unknown")} (Page {evidence.get("page", 0)})<br>"{clean_text}"</div>', unsafe_allow_html=True)
                 
                  # Suggestion
-                if result['status'] == 'contradicted' and result.get('suggestion'):
+                if result['status'] == 'contradicted':
                     st.markdown("**💡 Suggested Correction:**")
-                    st.success(result['suggestion'])
+                    if result.get('suggestion'):
+                         st.success(result['suggestion'])
+                    else:
+                        # On-demand correction if not already present
+                        # Note: This might be slow if done sequentially. 
+                        # ideally we do it in the verification loop or here with a spinner.
+                        # Since we didn't add it to verifier loop to avoid circular depend, we do it here?
+                        # Or better: Add it to the main processing loop above.
+                        # Let's add it to the main loop to be clean.
+                        pass
 
         # Split Screen View
         st.markdown("---")
