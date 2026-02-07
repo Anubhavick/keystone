@@ -1,0 +1,8 @@
+Section 1: Introduction
+
+This is a test paragraph for the document processor.
+It supports multiple lines.
+
+Section 2: details
+
+Another paragraph here.

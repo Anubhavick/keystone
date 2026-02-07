@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+env/
+.env
+*.pdf
+*.docx
+data/source_documents/*
+models/cache/*
+keystone/data/cache/
+data/cache/
+keystone/data/processed/*.json
+data/processed/*.json
+.DS_Store
+.ipynb_checkpoints/
