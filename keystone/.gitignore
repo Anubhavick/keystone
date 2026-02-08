@@ -14,3 +14,6 @@ keystone/data/processed/*.json
 data/processed/*.json
 .DS_Store
 .ipynb_checkpoints/
+
+# Large model files
+*.safetensors
