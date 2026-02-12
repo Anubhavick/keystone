@@ -17,18 +17,28 @@ except ImportError:
     LOCAL_ML_AVAILABLE = False
     logger.warning("Transformers/Torch not found. Local model extraction will be disabled.")
 
+try:
+    from openai import OpenAI
+    OPENAI_AVAILABLE = True
+except ImportError:
+    OPENAI_AVAILABLE = False
+    logger.warning("OpenAI library not found. OpenAI provider will be disabled.")
+
+
 class ClaimExtractor:
-    def __init__(self, api_key: str = None, local_model_path: str = None):
+    def __init__(self, api_key: str = None, provider: str = "anthropic", local_model_path: str = None):
         """
-        Initialize ClaimExtractor with optional local model or Anthropic client.
+        Initialize ClaimExtractor with optional local model, Anthropic, or OpenAI client.
         Args:
-            api_key: Optional API key override (default: env ANTHROPIC_API_KEY)
+            api_key: Optional API key override.
+            provider: 'anthropic' or 'openai' (default: 'anthropic').
             local_model_path: Path to the local fine-tuned model directory. 
-                              Defaults to 'saved_claim_extractor_model' in the same directory as this file.
         """
         self.local_model = None
         self.tokenizer = None
         self.use_local = False
+        self.provider = provider
+        self.client = None
         
         # Determine strict path to model if not provided
         if not local_model_path:
@@ -54,27 +64,39 @@ class ClaimExtractor:
         elif LOCAL_ML_AVAILABLE and not os.path.exists(local_model_path):
              logger.info(f"Local model not found at {local_model_path}. Using API fallback.")
         
-        # 2. Setup Anthropic Client as Fallback or Primary
-        key = api_key or os.getenv("ANTHROPIC_API_KEY")
-        if not key:
-            if not self.use_local:
-                logger.warning("ANTHROPIC_API_KEY not found and Local Model not loaded. Extraction will fail.")
-            self.client = None
-        else:
-            self.client = anthropic.Anthropic(api_key=key)
+        # 2. Setup API Client (Anthropic or OpenAI)
+        if not self.use_local:
+            if self.provider == "anthropic":
+                key = api_key or os.getenv("ANTHROPIC_API_KEY")
+                if not key:
+                    logger.warning("ANTHROPIC_API_KEY not found. Extraction will fail.")
+                else:
+                    self.client = anthropic.Anthropic(api_key=key)
+            elif self.provider == "openai":
+                if not OPENAI_AVAILABLE:
+                    logger.error("OpenAI library not installed. Please run `pip install openai`.")
+                else:
+                    key = api_key or os.getenv("OPENAI_API_KEY")
+                    if not key:
+                        logger.warning("OPENAI_API_KEY not found. Extraction will fail.")
+                    else:
+                        self.client = OpenAI(api_key=key)
 
     def extract_atomic_claims(self, text: str) -> List[Dict[str, Any]]:
-        """Extract claims using Local Model (preferred) or Claude (fallback)"""
+        """Extract claims using Local Model (preferred) or API (fallback)"""
         if not text or not text.strip():
             return []
 
         if self.use_local and self.local_model and self.tokenizer:
             return self._extract_with_local_model(text)
         elif self.client:
-            return self._extract_with_claude(text)
-        else:
-            logger.error("No extraction method available (No local model and no API key).")
-            return []
+            if self.provider == "anthropic":
+                return self._extract_with_claude(text)
+            elif self.provider == "openai":
+                return self._extract_with_openai(text)
+        
+        logger.error("No extraction method available (No local model and no valid API client).")
+        return []
 
     def _extract_with_local_model(self, text: str) -> List[Dict[str, Any]]:
         """Run inference using the local T5 model"""
@@ -123,12 +145,15 @@ class ClaimExtractor:
         except Exception as e:
             logger.error(f"Local model inference error: {e}")
             if self.client:
-                logger.info("Falling back to Claude due to local error.")
-                return self._extract_with_claude(text)
+                logger.info(f"Falling back to {self.provider} due to local error.")
+                if self.provider == "anthropic":
+                    return self._extract_with_claude(text)
+                elif self.provider == "openai":
+                    return self._extract_with_openai(text)
             return []
 
     def _extract_with_claude(self, text: str) -> List[Dict[str, Any]]:
-        """Original extraction logic using Claude"""
+        """Extraction logic using Claude"""
         try:
             prompt = f"""Extract 3-7 atomic factual claims from this text. Return ONLY valid JSON array:
 [{{"claim": "exact text", "type": "factual"}}]
@@ -156,4 +181,72 @@ Text: {text}"""
         except Exception as e:
             logger.error(f"Claude Extraction Error: {e}")
             return []
+
+    def _extract_with_openai(self, text: str) -> List[Dict[str, Any]]:
+        """Extraction logic using OpenAI GPT-4o"""
+        try:
+            prompt = f"""You are a precise fact-checking assistant. Extract 3-7 atomic factual claims from the text below.
+Return ONLY a valid JSON array of objects.
+Format:
+[
+  {{
+    "claim": "The exact claim text here",
+    "type": "factual"
+  }}
+]
+
+Text: {text}"""
+
+            response = self.client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {"role": "system", "content": "You are a helpful assistant that outputs only JSON."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.1,
+                response_format={"type": "json_object"}
+            )
+
+            content = response.choices[0].message.content
+            # OpenAI with json_object usually returns a dict like {"claims": [...] } or just the array if prompted well
+            # But specific instruction "Return ONLY a valid JSON array" usually works, 
+            # however response_format={"type": "json_object"} requires the output to be a valid JSON object, NOT a list.
+            # So the prompt should ask for { "claims": [...] }
+            
+            # Let's adjust parsing to handle both key-based or list-based if possible, 
+            # but strict json mode requires an object.
+            # actually better to just parse whatever valid json comes back
+            
+            try:
+                data = json.loads(content)
+                if isinstance(data, list):
+                    claims = data
+                elif isinstance(data, dict):
+                     # Look for likely keys
+                     for k in ['claims', 'result', 'output']:
+                         if k in data and isinstance(data[k], list):
+                             claims = data[k]
+                             break
+                     else:
+                         # Fallback if no list found
+                         claims = []
+                else:
+                    claims = []
+            except json.JSONDecodeError:
+                # Try regex cleanup if json mode failed or wasn't used
+                clean_content = re.sub(r'```json\n?|\n?```', '', content).strip()
+                claims = json.loads(clean_content)
+
+            # Post-process
+            for i, c in enumerate(claims):
+                if 'claim_id' not in c: c['claim_id'] = f'openai_claim_{i}'
+                if 'confidence' not in c: c['confidence'] = 0.9
+                if 'type' not in c: c['type'] = 'factual'
+            
+            return claims
+
+        except Exception as e:
+            logger.error(f"OpenAI Extraction Error: {e}")
+            return []
+
 

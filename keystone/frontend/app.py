@@ -143,17 +143,31 @@ with st.sidebar:
     st.markdown("**AI-Powered Fact Checking**")
     st.markdown("---")
     
+    # AI Provider Selection
+    provider = st.radio(
+        "Select AI Provider",
+        ("Anthropic (Claude)", "OpenAI (GPT-4o)"),
+        index=0
+    )
+    
+    # Map selection to internal code
+    provider_code = "anthropic" if "Anthropic" in provider else "openai"
+    
     # API Key input
+    api_key_label = "Anthropic API Key" if provider_code == "anthropic" else "OpenAI API Key"
     api_key_input = st.text_input(
-        "AI Provider API Key",
+        f"{api_key_label}",
         type="password",
         value=st.session_state.get('api_key', ''),
-        help="Enter your Anthropic or OpenAI API key for claim extraction"
+        help=f"Enter your {api_key_label} for claim extraction"
     )
+    
     if api_key_input:
         st.session_state.api_key = api_key_input
-        # Simple heuristic to guess provider, or add dropdown. Default to OpenAI compatible or what backend expects.
-        # User prompt asked for "Anthropic API Key".
+        st.session_state.provider = provider_code
+    
+    # Store provider in session state even if key is not yet entered (to fallback to defaults)
+    st.session_state.provider = provider_code
     
     st.markdown("### 📄 Upload Source Document")
     uploaded_file = st.file_uploader(
@@ -297,7 +311,10 @@ elif verify_button:
     # 3. CLAIM EXTRACTION
     with st.spinner("🎯 Extracting atomic claims..."):
         try:
-            extractor = ClaimExtractor(api_key=st.session_state.get('api_key'))
+            extractor = ClaimExtractor(
+                api_key=st.session_state.get('api_key'), 
+                provider=st.session_state.get('provider', 'anthropic')
+            )
             claims = extractor.extract_atomic_claims(llm_output)
             st.success(f"✅ Extracted {len(claims)} claims")
         except Exception as e:
@@ -330,7 +347,10 @@ elif verify_button:
             
         # Post-processing for Corrections
         # We do this after main verification to keep progress bar moving for initial results
-        correction_engine = CorrectionEngine(api_key=st.session_state.get('api_key'))
+        correction_engine = CorrectionEngine(
+            api_key=st.session_state.get('api_key'),
+            provider=st.session_state.get('provider', 'anthropic')
+        )
         
         for res in results:
             if res['status'] == 'contradicted' and not res.get('suggestion'):

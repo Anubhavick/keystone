@@ -9,6 +9,13 @@ try:
     LANGCHAIN_AVAILABLE = True
 except ImportError:
     LANGCHAIN_AVAILABLE = False
+
+try:
+    from openai import OpenAI
+    OPENAI_AVAILABLE = True
+except ImportError:
+    OPENAI_AVAILABLE = False
+
     
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -29,18 +36,27 @@ class CorrectionEngine:
             provider: 'anthropic' or 'openai'. Defaults to 'anthropic' to match ClaimExtractor preference.
         """
         self.provider = provider
-        self.api_key = api_key or os.getenv("ANTHROPIC_API_KEY")
+        self.api_key = api_key or os.getenv("ANTHROPIC_API_KEY") # fallback default
         self.client = None
         
         if self.provider == "anthropic":
+            if not self.api_key:
+                self.api_key = os.getenv("ANTHROPIC_API_KEY")
+            
             if self.api_key:
                 self.client = anthropic.Anthropic(api_key=self.api_key)
             else:
                 logger.warning("Anthropic API Key missing.")
         
-        elif self.provider == "openai" and LANGCHAIN_AVAILABLE:
-            # Fallback or alternative
-            pass
+        elif self.provider == "openai":
+            key = api_key or os.getenv("OPENAI_API_KEY")
+            if not key:
+                 logger.warning("OPENAI_API_KEY missing.")
+            else:
+                if OPENAI_AVAILABLE:
+                    self.client = OpenAI(api_key=key)
+                else:
+                    logger.error("OpenAI library not installed.")
             
     def generate_correction(self, claim: str, evidence: str) -> Optional[str]:
         """
@@ -71,9 +87,18 @@ Corrected Claim:"""
                 )
                 return response.content[0].text.strip()
                 
-            elif self.provider == "openai" and LANGCHAIN_AVAILABLE:
-                # Implementation for OpenAI if needed in future
-                return "Correction not implemented for OpenAI yet."
+            elif self.provider == "openai" and self.client:
+                # OpenAI Implementation
+                response = self.client.chat.completions.create(
+                    model="gpt-4o",
+                    messages=[
+                        {"role": "system", "content": "You are a helpful assistant."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    temperature=0.7,
+                    max_tokens=300
+                )
+                return response.choices[0].message.content.strip()
                 
             else:
                 return "AI provider not available for correction."
