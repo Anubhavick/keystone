@@ -10,7 +10,7 @@ class VectorStore:
             collection_name: Name of the collection (default 'keystone')
             persist_directory: Ignored in this simplified version (using in-memory Client)
         """
-        self.client = chromadb.Client()
+        self.client = chromadb.EphemeralClient()
         # Use get_or_create to be safe against re-init in same session if logic changes
         try:
             self.collection = self.client.get_or_create_collection(name=collection_name)
@@ -32,7 +32,7 @@ class VectorStore:
         ids = [c['chunk_id'] for c in chunks]
         metadatas = [c.get('metadata', {}) for c in chunks]
         
-        # Ensure metadata is flat/scalar for Chroma
+        # Ensure metadata is flat/scalar for Chroma; chromadb v1.5 rejects empty dicts
         clean_metadatas = []
         for m in metadatas:
             clean_m = {}
@@ -41,6 +41,9 @@ class VectorStore:
                     clean_m[k] = v
                 else:
                     clean_m[k] = str(v)
+            # chromadb v1.5 rejects empty metadata dicts — use a sentinel
+            if not clean_m:
+                clean_m = {"_empty": "true"}
             clean_metadatas.append(clean_m)
 
         self.collection.add(
@@ -48,6 +51,7 @@ class VectorStore:
             ids=ids,
             metadatas=clean_metadatas
         )
+        return True
 
     def search(self, query: str, top_k: int = 3):
         """
@@ -98,8 +102,30 @@ class VectorStore:
         }
 
     def delete_collection(self):
-        """Reset/Clear collection."""
+        """Reset/Clear collection (deletes and re-creates so the object stays usable)."""
+        name = self.collection.name
         try:
-            self.client.delete_collection(self.collection.name)
+            self.client.delete_collection(name)
         except Exception:
             pass
+        # Re-create so subsequent calls (e.g. get_collection_stats) still work
+        try:
+            self.collection = self.client.get_or_create_collection(name=name)
+        except Exception:
+            self.collection = self.client.create_collection(name=name)
+
+    def hybrid_search(self, query: str, top_k: int = 5) -> list:
+        """
+        Keyword-boosted semantic search.
+        Re-ranks semantic results by boosting chunks that contain query keywords.
+        """
+        results = self.search_with_scores(query, top_k=top_k * 2)  # over-fetch then re-rank
+        keywords = set(query.lower().split())
+
+        def boost(result):
+            text_lower = result['text'].lower()
+            keyword_hits = sum(1 for kw in keywords if kw in text_lower)
+            return result['score'] + keyword_hits * 0.1  # small boost per keyword hit
+
+        results.sort(key=boost, reverse=True)
+        return results[:top_k]

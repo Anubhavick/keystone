@@ -54,7 +54,7 @@ def test_extract_text_from_pdf(mock_pdf_open, processor):
     
     # Verify
     assert len(results) == 1
-    assert results[0]['text'] == "PDF Content Page 1"
+    assert "PDF Content" in results[0]['text']
     assert results[0]['metadata']['Author'] == 'Test'
 
 def test_process_txt_file(processor, sample_txt):

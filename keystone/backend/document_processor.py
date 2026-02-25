@@ -132,6 +132,10 @@ class DocumentProcessor:
         """Initialize the DocumentProcessor with a text splitter."""
         self.chunk_size = 500
         self.chunk_overlap = 50
+        self.text_splitter = SimpleRecursiveTextSplitter(
+            chunk_size=self.chunk_size,
+            chunk_overlap=self.chunk_overlap
+        )
         logger.info("DocumentProcessor initialized")
 
     def process_file(self, file_path: Union[str, Path]) -> List[Dict[str, Any]]:
@@ -294,10 +298,12 @@ class DocumentProcessor:
         Returns:
             List of chunk dictionaries ready for vector DB
         """
-        # Update splitter params dynamically if needed
-        self.text_splitter._chunk_size = chunk_size
-        self.text_splitter._chunk_overlap = overlap
-        
+        # Create a splitter with the requested params
+        splitter = SimpleRecursiveTextSplitter(
+            chunk_size=chunk_size,
+            chunk_overlap=overlap
+        )
+
         chunked_docs = []
         
         for doc in documents:
@@ -305,7 +311,7 @@ class DocumentProcessor:
             if not text:
                 continue
                 
-            chunks = self.text_splitter.split_text(text)
+            chunks = splitter.split_text(text)
             
             # Determine numbering key (page_number for PDF, paragraph_number for others)
             # Default to page_number if present, else paragraph_number, else 0
